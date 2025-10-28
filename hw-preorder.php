@@ -3611,8 +3611,6 @@ function hw_po_normalize_status($s){
   $s = trim((string)$s);
   return $map[$s] ?? $s;
 }
-$st = hw_po_normalize_status( get_post_meta($pid,'hw_po_status',true) ?: 'New' );
-
 // Naikkan status tiket begitu pembayaran WooCommerce sukses
 add_action('woocommerce_payment_complete', 'hw_po_on_wc_paid');
 add_action('woocommerce_order_status_changed', function($order_id, $from, $to){
