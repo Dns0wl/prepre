@@ -29,6 +29,7 @@ if (!defined('HW_PO_INTERNAL_EMAILS')) { define('HW_PO_INTERNAL_EMAILS', 'ops@ha
 if (!defined('HW_PO_NOTIFY_CUSTOMER')) { define('HW_PO_NOTIFY_CUSTOMER', false); }
 if (!defined('HW_POS_MANAGER_ROLE')) { define('HW_POS_MANAGER_ROLE', 'yith_pos_manager'); }
 if (!defined('HW_PO_REQUIRE_LOGIN_FOR_SUBMIT')) { define('HW_PO_REQUIRE_LOGIN_FOR_SUBMIT', true); }
+if (!defined('HW_PO_ENABLE_HEADER_SEARCH_OVERRIDE')) { define('HW_PO_ENABLE_HEADER_SEARCH_OVERRIDE', false); }
 
 /** ==== NEW: base & child slugs + URL helpers ==== */
 if (!defined('HW_PO_BASE_SLUG'))  { define('HW_PO_BASE_SLUG',  'pre-order'); }
@@ -46,6 +47,12 @@ function hw_po_child_url($child){ $child = trim($child,'/'); return home_url('/'
 if (!defined('HW_PO_DEBUG_BRIDGE')) define('HW_PO_DEBUG_BRIDGE', false);
 if (!function_exists('hwpo_dbg')) {
     function hwpo_dbg($m){ if(HW_PO_DEBUG_BRIDGE) error_log('[HW-PO BRIDGE] '.$m); }
+}
+
+if (!function_exists('hw_po_is_header_search_override_enabled')) {
+    function hw_po_is_header_search_override_enabled(){
+        return (bool) apply_filters('hw_po_enable_header_search_override', HW_PO_ENABLE_HEADER_SEARCH_OVERRIDE);
+    }
 }
 
 /** Deteksi konteks halaman form pre-order (ketat ke child slug) */
@@ -3689,6 +3696,23 @@ add_action('wp_footer', function(){
     .hwpo-modal-mini .inner{background:#fff;border-radius:16px;box-shadow:0 30px 90px rgba(0,0,0,.28);width:min(560px,92vw);max-height:80vh;overflow:auto;padding:18px}
     .hwpo-modal-mini .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
     .hwpo-modal-mini .close{background:#f3f4f6;border:0;border-radius:10px;padding:6px 10px;font-weight:800;cursor:pointer}
+    #hwpo-open-billing { transition: opacity .15s ease, box-shadow .15s ease; }
+    #hwpo-open-billing:focus { box-shadow: 0 0 0 3px rgba(60,110,113,.25); }
+    #hwpo-open-billing[disabled]{ opacity:.5; cursor:not-allowed; }
+    .hwpo-billing-wrap{ margin:16px 0 28px; border-radius:14px; }
+    .hwpo-billing-tile{
+      display:inline-flex; flex-direction:column; align-items:center; justify-content:center; width:180px;
+      aspect-ratio:1/1;
+      background:#3C6E71; color:#fff; border:0; border-radius:14px;
+      box-shadow:0 1px 2px rgba(0,0,0,.06); cursor:pointer;
+      transition:transform .06s ease, opacity .15s ease;
+    }
+    .hwpo-billing-tile:hover{ opacity:.95 }
+    .hwpo-billing-tile:active{ transform:translateY(1px) }
+    .hwpo-billing-tile:focus{ outline:2px solid #E6EEF0; outline-offset:3px; }
+    .hwpo-billing-tile .tile-icon{ width:72px; height:72px; display:flex; align-items:center; justify-content:center; }
+    .hwpo-billing-tile .tile-icon svg{ width:48px; height:48px }
+    .hwpo-billing-tile .tile-text{ font-weight:700; letter-spacing:.2px }
   </style>
 
   <div class="hwpo-modal-mini" id="hwpo-billing-modal" aria-hidden="true">
@@ -3911,7 +3935,12 @@ if (!defined('ABSPATH')) exit;
 /* ============================================================
  * Assets (CSS + JS)
  * ============================================================ */
-add_action('wp_enqueue_scripts', function () {
+function hw_po_enqueue_ref_assets(){
+  static $enqueued = false;
+  if ($enqueued) return;
+  if (is_admin() && !wp_doing_ajax()) return;
+
+  $enqueued = true;
   $ver = '1.5.0';
 
   wp_register_style('hw-wc-ref', false, [], $ver);
@@ -4234,7 +4263,7 @@ CSS;
 })();
 JS;
   wp_add_inline_script('hw-wc-ref', $js);
-});
+}
 
 /* ============================================================
  * Helpers
@@ -4246,15 +4275,31 @@ function hw_ref_norm($s){
 function hw_ref_match_cat_term_ids($query){
   $q = hw_ref_norm($query);
   if(!$q) return [];
-  $terms = get_terms(['taxonomy'=>'product_cat','hide_empty'=>false,'number'=>0]);
-  if(is_wp_error($terms)) return [];
+  static $cache = null;
+  if ($cache === null) {
+    $terms = get_terms(['taxonomy'=>'product_cat','hide_empty'=>false,'number'=>0]);
+    if(is_wp_error($terms) || !$terms){
+      $cache = [];
+    } else {
+      $cache = array_map(function($t){
+        return [
+          'id'   => (int)$t->term_id,
+          'name' => hw_ref_norm($t->name),
+          'slug' => hw_ref_norm($t->slug),
+        ];
+      }, $terms);
+    }
+  }
+
+  if (!$cache) return [];
+
   $ids = [];
-  foreach($terms as $t){
-    $n1 = hw_ref_norm($t->name);
-    $n2 = hw_ref_norm($t->slug);
+  foreach($cache as $t){
+    $n1 = $t['name'];
+    $n2 = $t['slug'];
     if($n1==='' && $n2==='') continue;
     if(strpos($n1,$q)!==false || strpos($n2,$q)!==false || strpos($q,$n1)!==false){
-      $ids[] = (int)$t->term_id;
+      $ids[] = $t['id'];
     }
   }
   return array_values(array_unique($ids));
@@ -4430,6 +4475,7 @@ function hw_wc_ref_search_cb() {
  * Shortcode MODAL /pre-order (tetap)
  * ============================================================ */
 add_shortcode('hw_wc_product_reference', function($atts = []) {
+  hw_po_enqueue_ref_assets();
   $a = shortcode_atts([
     'bind_name'    => 'req_product',
     'placeholder'  => 'Search Your Product',
@@ -4499,6 +4545,7 @@ add_shortcode('hw_wc_product_reference', function($atts = []) {
  * Shortcode GLOBAL (navbar) – submit => halaman hasil pencarian
  * ============================================================ */
 add_shortcode('hw_wc_product_search_global', function($atts = []){
+  hw_po_enqueue_ref_assets();
   $a = shortcode_atts([
     'placeholder' => 'Search Your Product',
     'show_category' => 'yes',
@@ -4541,6 +4588,7 @@ add_shortcode('hw_wc_product_search_global', function($atts = []){
  * ============================================================ */
 if (!function_exists('hw_shortcode_search_hw')) {
   function hw_shortcode_search_hw($atts = []){
+    hw_po_enqueue_ref_assets();
     $a = shortcode_atts([
       'placeholder'  => 'Search Your Product',
       'show_category'=> 'yes',
@@ -4568,10 +4616,11 @@ if (!function_exists('hw_shortcode_search_hw')) {
  * - Search default di tempat lain tetap utuh
  * ============================================================ */
 function hw_search_hw_markup_for_header(){
+  hw_po_enqueue_ref_assets();
   return do_shortcode('[hw_search_hw placeholder="Search products..." show_category="yes" query_var="category" search_base="/"]');
 }
 
-add_filter('get_search_form', function($form){
+function hw_po_maybe_override_search_form($form){
   if (is_admin()) return $form;
 
   static $header_replaced = false;
@@ -4586,47 +4635,23 @@ add_filter('get_search_form', function($form){
     return hw_search_hw_markup_for_header();
   }
   return $form;
-}, 20);
+}
 
-/* Gaya kecil agar pas di header/menu */
-add_action('wp_head', function(){
+function hw_po_print_header_search_styles(){
   ?>
   <style>
     .menu-item-hw-search { display:inline-block; vertical-align:middle; list-style:none; }
     .menu-item-hw-search .hw-ref-global { min-width:220px; }
     @media (min-width:992px){ .menu-item-hw-search .hw-ref-global { min-width:320px; } }
     .header .hw-ref-global, .site-header .hw-ref-global{width:100%}
-    #hwpo-open-billing { transition: opacity .15s ease, box-shadow .15s ease; }
-    #hwpo-open-billing:focus { box-shadow: 0 0 0 3px rgba(60,110,113,.25); }
-    #hwpo-open-billing[disabled]{ opacity:.5; cursor:not-allowed; }
-    /* wrapper opsional untuk spacing */
-    .hwpo-billing-wrap{ margin:16px 0 28px;
-        border-radius:14px;
-    }
-    
-    /* tile tombol */
-    .hwpo-billing-tile{
-      display:inline-flex; flex-direction:column; align-items:center; justify-content:center; width:180px;
-      aspect-ratio:1/1;
-      background:#3C6E71; color:#fff; border:0; border-radius:14px;
-      box-shadow:0 1px 2px rgba(0,0,0,.06); cursor:pointer;
-      transition:transform .06s ease, opacity .15s ease;
-    }
-    .hwpo-billing-tile:hover{ opacity:.95 }
-    .hwpo-billing-tile:active{ transform:translateY(1px) }
-    .hwpo-billing-tile:focus{ outline:2px solid #E6EEF0; outline-offset:3px; }
-    
-    /* ikon & teks */
-    .hwpo-billing-tile .tile-icon{
-      width:72px; height:72px;
-      display:flex; align-items:center; justify-content:center;
-    }
-    .hwpo-billing-tile .tile-icon svg{ width:48px; height:48px }
-    .hwpo-billing-tile .tile-text{ font-weight:700; letter-spacing:.2px }
-
   </style>
   <?php
-});
+}
+
+if (hw_po_is_header_search_override_enabled()) {
+  add_filter('get_search_form', 'hw_po_maybe_override_search_form', 20);
+  add_action('wp_head', 'hw_po_print_header_search_styles');
+}
 
 
 
@@ -4638,6 +4663,7 @@ add_action('wp_head', function(){
  * - Aman: tidak mengganggu shortcode/fungsi yang sudah ada.
  * ============================================================ */
 add_shortcode('hw_search_sitewide', function($atts = []){
+  hw_po_enqueue_ref_assets();
   $a = shortcode_atts([
     'placeholder'  => 'Search the site...',
     'search_base'  => '/',   // path action form (biasanya '/')
